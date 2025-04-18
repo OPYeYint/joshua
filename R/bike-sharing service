@@ -1,0 +1,96 @@
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Rename columns
+q1_2019 <- rename(q1_2019,
+                  ride_id = trip_id,
+                  rideable_type = bikeid,
+                  started_at = start_time,
+                  ended_at = end_time,
+                  start_station_name = from_station_name,
+                  start_station_id = from_station_id,
+                  end_station_name = to_station_name,
+                  end_station_id = to_station_id,
+                  member_casual = usertype)
+
+# Convert columns to character
+q1_2019 <- mutate(q1_2019,
+                  ride_id = as.character(ride_id),
+                  rideable_type = as.character(rideable_type))
+
+# Combine datasets
+all_trip <- bind_rows(q1_2019, q1_2020)
+
+# Drop unnecessary columns
+all_trip <- all_trip %>%
+  select(-c(start_lat, start_lng, end_lat, end_lng, birthyear, gender, tripduration))
+
+# Recode user types
+all_trip <- all_trip %>%
+  mutate(member_casual = recode(member_casual,
+                                "Subscriber" = "member",
+                                "Customer" = "casual"))
+
+# Add date components
+all_trip$date <- as.Date(all_trip$started_at)
+all_trip$month <- format(all_trip$date, "%m")
+all_trip$day <- format(all_trip$date, "%d")
+all_trip$year <- format(all_trip$date, "%Y")
+all_trip$day_of_week <- format(all_trip$date, "%A")
+
+# Convert time format
+all_trip$started_at <- as.POSIXct(all_trip$started_at, format = "%m/%d/%Y %H:%M", tz = "UTC")
+all_trip$ended_at <- as.POSIXct(all_trip$ended_at, format = "%m/%d/%Y %H:%M", tz = "UTC")
+
+# Calculate ride length
+all_trip$ride_length <- as.numeric(difftime(all_trip$ended_at, all_trip$started_at, units = "mins"))
+
+# Remove invalid data
+all_trip_v2 <- all_trip %>%
+  filter(start_station_name != "HQ QR", ride_length >= 0)
+
+# Descriptive stats
+mean(all_trip_v2$ride_length)
+median(all_trip_v2$ride_length)
+max(all_trip_v2$ride_length)
+min(all_trip_v2$ride_length)
+
+# Aggregations
+aggregate(ride_length ~ member_casual, data = all_trip_v2, FUN = mean)
+aggregate(ride_length ~ member_casual, data = all_trip_v2, FUN = median)
+aggregate(ride_length ~ member_casual, data = all_trip_v2, FUN = max)
+aggregate(ride_length ~ member_casual, data = all_trip_v2, FUN = min)
+
+# Weekly pattern
+all_trip_v2$day_of_week <- ordered(all_trip_v2$day_of_week,
+                                   levels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+
+aggregate(ride_length ~ member_casual + day_of_week, data = all_trip_v2, FUN = mean)
+
+# Plot: number of rides by day
+all_trip_v2 %>%
+  mutate(weekday = wday(started_at, label = TRUE)) %>%
+  group_by(member_casual, weekday) %>%
+  summarise(number_of_rides = n(),
+            average_duration = mean(ride_length)) %>%
+  arrange(member_casual, weekday) %>%
+  ggplot(aes(x = weekday, y = number_of_rides, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  labs(title = "Number of Rides by Weekday", y = "Number of Rides", x = "Weekday")
+
+# Plot: average ride length by day
+all_trip_v2 %>%
+  mutate(weekday = wday(started_at, label = TRUE)) %>%
+  group_by(member_casual, weekday) %>%
+  summarise(number_of_rides = n(),
+            average_duration = mean(ride_length)) %>%
+  arrange(member_casual, weekday) %>%
+  ggplot(aes(x = weekday, y = average_duration, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  labs(title = "Average Ride Duration by Weekday", y = "Average Duration (mins)", x = "Weekday")
+
+# Export average ride length to CSV
+counts <- aggregate(ride_length ~ member_casual + day_of_week, data = all_trip_v2, FUN = mean)
+write.csv(counts, file = "avg_ride_length.csv", row.names = FALSE)
+
